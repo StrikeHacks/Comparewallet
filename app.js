@@ -128,19 +128,29 @@ function shorten(addr) {
   return addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : addr;
 }
 
-// Shill-time lines: "<mint>  <t.me-link-or-time>  [label]". The time source is
-// the first non-space token after the mint (links/ISO times contain no spaces).
+// Shill-time lines, any of:
+//   "<t.me-link> [label]"            -> scrape both the call time AND the CA
+//   "<mint>  <t.me-link> [label]"    -> CA given, time scraped from the link
+//   "<mint>  <time-or-unix> [label]" -> manual time (for private channels)
 function parseShillInputs() {
   const lines = $('cas').value.split('\n').map((l) => l.trim()).filter(Boolean);
   const coins = [];
   const seen = new Set();
   for (const line of lines) {
-    const m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})[\s,]+(\S+)(?:[\s,]+(.*))?$/);
-    if (!m) { log(`Skipping line (need "mint  t.me-link"): ${line}`, 'warn'); continue; }
-    const mint = m[1];
-    if (seen.has(mint)) continue;
-    seen.add(mint);
-    coins.push({ mint, src: m[2], label: (m[3] || '').trim() || shorten(mint) });
+    let mint = null;
+    let src = null;
+    let label = '';
+    let m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})[\s,]+(\S+)(?:[\s,]+(.*))?$/);
+    if (m) { mint = m[1]; src = m[2]; label = (m[3] || '').trim(); }
+    else {
+      const u = line.match(/^(https?:\/\/t\.me\/\S+)(?:[\s,]+(.*))?$/i);
+      if (u) { src = u[1]; label = (u[2] || '').trim(); }
+    }
+    if (!src) { log(`Skipping line (need a t.me link or "mint  link/time"): ${line}`, 'warn'); continue; }
+    const key = mint || src;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    coins.push({ mint, src, label });
   }
   return coins;
 }
@@ -342,30 +352,45 @@ async function fetchTradersBirdeyeWindow(apiKey, mint, label, afterTime, beforeT
   return wallets;
 }
 
-/* Resolve a "time source" to a unix-second timestamp: either a public t.me
- * message link (scraped via a CORS proxy) or a typed date / unix value. */
+/* Resolve a typed "time source" (unix or ISO date) to unix seconds.
+ * For t.me links use resolveTelegramMessage() instead (gives time AND CA). */
 async function resolveTimeSource(src) {
-  if (/^https?:\/\/t\.me\//i.test(src)) return resolveTelegramTime(src);
   if (/^\d{9,11}$/.test(src)) return parseInt(src, 10);           // raw unix seconds
   const ts = Date.parse(src.replace('_', 'T'));                   // typed datetime, e.g. 2024-06-20T14:30
   if (!isNaN(ts)) return Math.floor(ts / 1000);
-  throw new Error(`not a t.me link or a recognizable date: "${src}"`);
+  throw new Error(`not a recognizable date/unix time: "${src}"`);
 }
 
-async function resolveTelegramTime(link) {
+/* Fetch a public Telegram post's embed HTML through a CORS proxy. */
+async function fetchTelegramEmbed(link) {
   const embed = link.split('?')[0] + '?embed=1&mode=tme';
   const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(embed);
   let res;
   try { res = await fetch(proxied); }
   catch (e) { throw new Error(`proxy unreachable (${e.message})`); }
   if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
-  const html = await res.text();
-  let m = html.match(/tgme_widget_message_date[\s\S]*?datetime="([^"]+)"/);
-  if (!m) m = html.match(/datetime="([^"]+)"/);
-  if (!m) throw new Error('no timestamp in page (private channel or unavailable)');
-  const ts = Date.parse(m[1]);
-  if (isNaN(ts)) throw new Error(`could not parse "${m[1]}"`);
-  return Math.floor(ts / 1000);
+  return res.text();
+}
+
+/* From a public t.me link, return { ts, mint } scraped from the message:
+ * the post time and (best-effort) the Solana contract address in the text. */
+async function resolveTelegramMessage(link) {
+  const html = await fetchTelegramEmbed(link);
+  let m = html.match(/tgme_widget_message_date[\s\S]*?datetime="([^"]+)"/) || html.match(/datetime="([^"]+)"/);
+  const parsed = m ? Date.parse(m[1]) : NaN;
+  const ts = isNaN(parsed) ? null : Math.floor(parsed / 1000);
+  return { ts, mint: extractMintFromHtml(html) };
+}
+
+/* Pull a plausible Solana mint out of a message: prefer pump.fun addresses
+ * (they end in "pump"), otherwise the first base58 32-44 token that isn't a
+ * known program/AMM address. Searches the message-text container first. */
+function extractMintFromHtml(html) {
+  const textDiv = html.match(/tgme_widget_message_text[^>]*>([\s\S]*?)<\/div>/i);
+  const scope = textDiv ? textDiv[1] : html;
+  const cands = scope.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || [];
+  const valid = cands.filter((a) => !KNOWN_ADDRESSES.has(a));
+  return valid.find((a) => /pump$/i.test(a)) || valid[0] || null;
 }
 
 /* ===========================================================================
@@ -471,17 +496,28 @@ async function analyze() {
   $('resultsCard').hidden = true;
   log(`Analyzing ${coins.length} coins in "${mode}" mode…`);
 
-  // Shill-time mode: resolve each coin's call time before scanning.
+  // Shill-time mode: resolve each coin's call time (and CA, from links) first.
   if (mode === 'shilltime') {
     const resolved = [];
     for (const c of coins) {
+      const tag = c.label || shorten(c.mint || c.src);
       try {
-        c.ts = await resolveTimeSource(c.src);
-        log(`  ⏱ ${c.label}: call time ${new Date(c.ts * 1000).toISOString()} ` +
-            `→ window ${hoursBefore}h before / ${hoursAfter}h after`, 'ok');
+        if (/^https?:\/\/t\.me\//i.test(c.src)) {
+          const info = await resolveTelegramMessage(c.src);
+          if (!info.ts) throw new Error('no post time found (private channel or unavailable)');
+          c.ts = info.ts;
+          if (!c.mint) c.mint = info.mint;
+          if (!c.mint) throw new Error('no contract address found in the message — add it as "mint  link"');
+        } else {
+          if (!c.mint) throw new Error('a typed time needs a mint in front: "mint  2024-06-20T14:30"');
+          c.ts = await resolveTimeSource(c.src);
+        }
+        if (!c.label) c.label = shorten(c.mint);
+        log(`  ⏱ ${c.label} (${shorten(c.mint)}): call ${new Date(c.ts * 1000).toISOString()} ` +
+            `→ window −${hoursBefore}h / +${hoursAfter}h`, 'ok');
         resolved.push(c);
       } catch (e) {
-        log(`  ✗ ${c.label}: could not resolve time from "${c.src}" — ${e.message}`, 'err');
+        log(`  ✗ ${tag}: ${e.message}`, 'err');
       }
     }
     coins = resolved;
