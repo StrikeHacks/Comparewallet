@@ -231,10 +231,21 @@ async function fetchTradersBirdeye(apiKey, mint, label) {
   while (true) {
     const url = `https://public-api.birdeye.so/defi/txs/token?address=${encodeURIComponent(mint)}` +
                 `&offset=${offset}&limit=${limit}&tx_type=swap&sort_type=desc`;
-    const res = await fetch(url, {
-      headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' },
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' },
+      });
+    } catch (e) {
+      throw new Error('Could not reach Birdeye (network/CORS). If this is a CORS error, ' +
+        'Birdeye is blocking browser calls for your key/plan — tell me and I will add a proxy step. ' +
+        `(${e.message})`);
+    }
     if (res.status === 429) { log('  Rate limited — waiting 3s…', 'warn'); await sleep(3000); continue; }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Birdeye rejected the API key (HTTP ${res.status}). Check the key, or this ` +
+        'endpoint may need a higher Birdeye plan.');
+    }
     if (!res.ok) throw new Error(`Birdeye HTTP ${res.status}`);
     const json = await res.json();
     if (json.success === false) throw new Error(json.message || 'Birdeye request failed');
@@ -245,7 +256,8 @@ async function fetchTradersBirdeye(apiKey, mint, label) {
       if (w) wallets.set(w, 0n);
     }
     log(`  ${label}: ${offset + items.length} trades scanned → ${wallets.size} unique traders`);
-    if (items.length < limit) break;
+    const hasNext = json?.data?.hasNext;
+    if (hasNext === false || items.length < limit) break;
     offset += limit;
     // Birdeye caps offset+limit at 10000 for this endpoint.
     if (offset >= 10000) { log('  Reached Birdeye 10k-trade cap (most recent trades).', 'warn'); break; }
