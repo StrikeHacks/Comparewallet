@@ -53,6 +53,8 @@ function loadSettings() {
   if (minSol !== null) $('minSol').value = minSol;
   const maxUsdc = localStorage.getItem('cw_maxusdc');
   if (maxUsdc !== null) $('maxUsdc').value = maxUsdc;
+  const maxTrades = localStorage.getItem('cw_maxtrades');
+  if (maxTrades !== null) $('maxTrades').value = maxTrades;
   const onlyReal = localStorage.getItem('cw_onlyreal');
   if (onlyReal !== null) $('onlyReal').checked = onlyReal === '1';
   const exclBots = localStorage.getItem('cw_excludebots');
@@ -67,6 +69,7 @@ function saveSettings() {
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
   localStorage.setItem('cw_minsol', $('minSol').value);
   localStorage.setItem('cw_maxusdc', $('maxUsdc').value);
+  localStorage.setItem('cw_maxtrades', $('maxTrades').value);
   localStorage.setItem('cw_onlyreal', $('onlyReal').checked ? '1' : '0');
   localStorage.setItem('cw_excludebots', $('excludeBots').checked ? '1' : '0');
 }
@@ -75,6 +78,7 @@ function toggleKeyFields() {
   const mode = $('mode').value;
   $('bitqueryField').hidden = mode !== 'trades';
   $('birdeyeField').hidden = mode !== 'birdeye';
+  $('maxTradesWrap').hidden = mode === 'holders'; // only relevant for trade-history modes
 }
 
 /* ---- Logging -------------------------------------------------------------- */
@@ -223,14 +227,17 @@ async function fetchTraders(token, mint, label) {
  * Collects the `owner` (trader wallet) of every swap on the token, so it
  * captures wallets that have already sold out.
  * ===========================================================================*/
-async function fetchTradersBirdeye(apiKey, mint, label) {
+async function fetchTradersBirdeye(apiKey, mint, label, maxTrades) {
   const wallets = new Map();
   const limit = 50; // Birdeye max page size for this endpoint
+  const hardCap = Math.min(maxTrades || 5000, 10000); // Birdeye offset cap is 10k
   let offset = 0;
+  // Scan oldest-first: launch-era buyers (snipers / shillers / team) come first,
+  // so a capped scan captures the high-signal wallets instead of dust traders.
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const url = `https://public-api.birdeye.so/defi/txs/token?address=${encodeURIComponent(mint)}` +
-                `&offset=${offset}&limit=${limit}&tx_type=swap&sort_type=desc`;
+                `&offset=${offset}&limit=${limit}&tx_type=swap&sort_type=asc`;
     let res;
     try {
       res = await fetch(url, {
@@ -259,8 +266,10 @@ async function fetchTradersBirdeye(apiKey, mint, label) {
     const hasNext = json?.data?.hasNext;
     if (hasNext === false || items.length < limit) break;
     offset += limit;
-    // Birdeye caps offset+limit at 10000 for this endpoint.
-    if (offset >= 10000) { log('  Reached Birdeye 10k-trade cap (most recent trades).', 'warn'); break; }
+    if (offset >= hardCap) {
+      log(`  Reached scan limit (${hardCap} earliest trades). Raise "Max. trades to scan" for deeper history.`, 'warn');
+      break;
+    }
     await sleep(1100); // free tier ≈ 1 request/second
   }
   return wallets;
@@ -357,6 +366,8 @@ async function analyze() {
   if (isNaN(maxUsdc) || maxUsdc < 0) maxUsdc = 0; // 0 = no cap
   const onlyReal = $('onlyReal').checked;
   const excludeBots = $('excludeBots').checked;
+  let maxTrades = parseInt($('maxTrades').value, 10);
+  if (isNaN(maxTrades) || maxTrades < 50) maxTrades = 5000;
 
   $('analyze').disabled = true;
   resetLog();
@@ -377,7 +388,7 @@ async function analyze() {
         decimals = await getDecimals(heliusKey, mint);
         owners = await fetchHolders(heliusKey, mint, label);
       } else if (mode === 'birdeye') {
-        owners = await fetchTradersBirdeye(birdeyeKey, mint, label);
+        owners = await fetchTradersBirdeye(birdeyeKey, mint, label, maxTrades);
       } else {
         owners = await fetchTraders(bitqueryKey, mint, label);
       }

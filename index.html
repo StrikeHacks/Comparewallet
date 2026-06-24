@@ -77,6 +77,10 @@ EgQ...mint    $ANOTHER"></textarea>
             <span>Max. USDC balance</span>
             <input type="number" id="maxUsdc" min="0" step="1000" value="250000" />
           </label>
+          <label class="field inline" id="maxTradesWrap" hidden>
+            <span>Max. trades to scan / coin</span>
+            <input type="number" id="maxTrades" min="50" step="500" value="5000" />
+          </label>
           <button id="analyze" class="primary">Analyze overlap</button>
         </div>
         <label class="check">
