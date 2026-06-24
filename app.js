@@ -411,27 +411,28 @@ async function resolveTimeSource(src) {
 }
 
 /* Fetch a public Telegram post's embed HTML through a CORS proxy.
- * Tries the configured proxy, then public fallbacks, so one being down/blocked
- * doesn't break time/CA detection. */
+ * Tries several proxies (allorigins JSON first — most reliable CORS) so one
+ * being down/blocked doesn't break time/CA detection. */
 async function fetchTelegramEmbed(link) {
   const embed = link.split('?')[0] + '?embed=1&mode=tme';
   const enc = encodeURIComponent(embed);
   const custom = (typeof document !== 'undefined' && $('proxyUrl') && $('proxyUrl').value.trim()) || '';
-  const candidates = [
-    custom ? custom + enc : null,
-    'https://api.allorigins.win/raw?url=' + enc,
-    'https://corsproxy.io/?url=' + enc,
-    'https://thingproxy.freeboard.io/fetch/' + embed,
+  const attempts = [
+    { url: 'https://api.allorigins.win/get?url=' + enc, json: true }, // JSON, solid CORS
+    { url: 'https://api.allorigins.win/raw?url=' + enc },
+    { url: 'https://corsproxy.io/?url=' + enc },
+    { url: 'https://thingproxy.freeboard.io/fetch/' + embed },
+    custom ? { url: custom + enc } : null,
   ].filter(Boolean);
-  let lastErr = 'no proxy tried';
-  for (const p of candidates) {
+  let lastErr = 'no proxy reachable';
+  for (const a of attempts) {
     try {
-      const res = await fetch(p);
+      const res = await fetch(a.url);
       if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
-      const html = await res.text();
+      const html = a.json ? (await res.json()).contents : await res.text();
       if (html && html.length > 200) return html;
       lastErr = 'empty response';
-    } catch (e) { lastErr = e.message; }
+    } catch (e) { lastErr = e.message || 'fetch failed'; }
   }
   throw new Error(`could not load the Telegram post via any proxy (${lastErr})`);
 }
