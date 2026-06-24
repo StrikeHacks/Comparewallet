@@ -38,8 +38,8 @@
         </label>
 
         <label class="field" id="proxyField" hidden>
-          <span>CORS proxy for Birdeye (browsers can't call Birdeye directly). Leave default, or paste your own proxy URL ending in <code>?url=</code></span>
-          <input type="text" id="proxyUrl" placeholder="https://corsproxy.io/?url=" autocomplete="off" />
+          <span>CORS proxy for Birdeye — <b>leave empty</b> (Birdeye normally works directly). Only fill this if Birdeye gives a CORS error, with your own proxy URL ending in <code>?url=</code> (see README for a free Cloudflare Worker).</span>
+          <input type="text" id="proxyUrl" placeholder="(leave empty unless Birdeye CORS-errors)" autocomplete="off" />
         </label>
 
         <label class="field" id="bitqueryField" hidden>

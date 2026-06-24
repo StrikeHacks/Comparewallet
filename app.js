@@ -39,7 +39,7 @@ const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const DEFAULT_PROXY = 'https://corsproxy.io/?url='; // browsers can't call Birdeye directly
+const DEFAULT_PROXY = ''; // Birdeye works directly from the browser; only set a proxy if it CORS-errors
 
 // Route a URL through the configured CORS proxy (prefix ending in ?url=).
 function proxify(url) {
