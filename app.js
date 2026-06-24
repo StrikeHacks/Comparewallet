@@ -97,6 +97,8 @@ function toggleKeyFields() {
   $('maxTradesWrap').hidden = mode === 'holders'; // only relevant for trade-history modes
   $('windowWrap').hidden = mode !== 'shilltime';
   $('shillHint').hidden = mode !== 'shilltime';
+  // show the Telegram box on each coin card only in shill-time mode
+  document.querySelectorAll('.coin-card').forEach((c) => c.classList.toggle('show-tg', mode === 'shilltime'));
 }
 
 /* ---- Logging -------------------------------------------------------------- */
@@ -113,54 +115,91 @@ function resetLog() {
   $('progressCard').hidden = false;
 }
 
-/* ---- Input parsing -------------------------------------------------------- */
-// Each line: "<mint> [optional label]". Label = remainder after first space/comma/tab.
+function shorten(addr) {
+  return addr && addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : (addr || '');
+}
+
+/* ---- Per-coin input cards ------------------------------------------------- */
+const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function letterFor(i) { return i < 26 ? String.fromCharCode(65 + i) : `#${i + 1}`; }
+
+function getCoinCards() {
+  return [...document.querySelectorAll('.coin-card')].map((card) => ({
+    label: card.querySelector('.coin-label').value.trim(),
+    ca: card.querySelector('.coin-ca').value.trim(),
+    tg: card.querySelector('.coin-tg').value.trim(),
+  }));
+}
+
+function saveCoins() {
+  try { localStorage.setItem('cw_coins', JSON.stringify(getCoinCards())); } catch { /* ignore */ }
+}
+
+function addCoinCard(label, ca = '', tg = '') {
+  const card = document.createElement('div');
+  card.className = 'coin-card' + ($('mode').value === 'shilltime' ? ' show-tg' : '');
+  card.innerHTML =
+    '<div class="coin-card-head">' +
+      '<input class="coin-label" type="text" />' +
+      '<button class="coin-remove" type="button" title="Remove coin">×</button>' +
+    '</div>' +
+    '<input class="coin-ca" type="text" placeholder="Contract address (mint)" autocomplete="off" />' +
+    '<input class="coin-tg" type="text" placeholder="Telegram message link (or a time like 2024-06-20T14:30)" autocomplete="off" />';
+  card.querySelector('.coin-label').value = label;
+  card.querySelector('.coin-ca').value = ca;
+  card.querySelector('.coin-tg').value = tg;
+  card.querySelector('.coin-remove').addEventListener('click', () => {
+    if (document.querySelectorAll('.coin-card').length <= 1) return;
+    card.remove();
+    saveCoins();
+  });
+  card.addEventListener('input', saveCoins);
+  $('coinList').appendChild(card);
+}
+
+function initCoinCards() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('cw_coins')); } catch { /* ignore */ }
+  if (Array.isArray(saved) && saved.length) {
+    saved.forEach((c, i) => addCoinCard(c.label || `Coin ${letterFor(i)}`, c.ca || '', c.tg || ''));
+  } else {
+    addCoinCard('Coin A');
+    addCoinCard('Coin B');
+  }
+}
+
+/* ---- Input parsing (from cards) ------------------------------------------- */
 function parseInputs() {
-  const lines = $('cas').value.split('\n').map((l) => l.trim()).filter(Boolean);
   const coins = [];
   const seen = new Set();
-  for (const line of lines) {
-    const m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})(?:[\s,]+(.*))?$/);
-    if (!m) {
-      log(`Skipping line (not a valid Solana address): ${line}`, 'warn');
-      continue;
-    }
-    const mint = m[1];
-    if (seen.has(mint)) continue;
-    seen.add(mint);
-    const label = (m[2] || '').trim() || shorten(mint);
-    coins.push({ mint, label });
+  for (const c of getCoinCards()) {
+    if (!c.ca) continue;
+    if (!MINT_RE.test(c.ca)) { log(`Skipping "${c.label || c.ca}": not a valid Solana address.`, 'warn'); continue; }
+    if (seen.has(c.ca)) continue;
+    seen.add(c.ca);
+    coins.push({ mint: c.ca, label: c.label || shorten(c.ca) });
   }
   return coins;
 }
 
-function shorten(addr) {
-  return addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : addr;
-}
-
-// Shill-time lines, any of:
-//   "<t.me-link> [label]"            -> scrape both the call time AND the CA
-//   "<mint>  <t.me-link> [label]"    -> CA given, time scraped from the link
-//   "<mint>  <time-or-unix> [label]" -> manual time (for private channels)
+// Shill-time: each coin has a Telegram link (or typed time) in its own box, and
+// an optional contract-address box. A t.me link gives both the time and (if the
+// CA box is empty) the contract address.
 function parseShillInputs() {
-  const lines = $('cas').value.split('\n').map((l) => l.trim()).filter(Boolean);
   const coins = [];
   const seen = new Set();
-  for (const line of lines) {
+  for (const c of getCoinCards()) {
     let mint = null;
-    let src = null;
-    let label = '';
-    let m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})[\s,]+(\S+)(?:[\s,]+(.*))?$/);
-    if (m) { mint = m[1]; src = m[2]; label = (m[3] || '').trim(); }
-    else {
-      const u = line.match(/^(https?:\/\/t\.me\/\S+)(?:[\s,]+(.*))?$/i);
-      if (u) { src = u[1]; label = (u[2] || '').trim(); }
+    if (c.ca) {
+      if (!MINT_RE.test(c.ca)) { log(`Skipping "${c.label || c.ca}": invalid contract address.`, 'warn'); continue; }
+      mint = c.ca;
     }
-    if (!src) { log(`Skipping line (need a t.me link or "mint  link/time"): ${line}`, 'warn'); continue; }
-    const key = mint || src;
+    if (!c.tg) { if (mint) log(`Skipping "${c.label || mint}": no Telegram link/time given.`, 'warn'); continue; }
+    const key = mint || c.tg;
     if (seen.has(key)) continue;
     seen.add(key);
-    coins.push({ mint, src, label });
+    coins.push({ mint, src: c.tg, label: c.label });
   }
   return coins;
 }
@@ -755,13 +794,19 @@ function csvCell(v) {
 /* ---- Wire up -------------------------------------------------------------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
+  initCoinCards();
+  toggleKeyFields(); // apply TG-box visibility to the loaded cards
   $('mode').addEventListener('change', toggleKeyFields);
+  $('addCoin').addEventListener('click', () => {
+    addCoinCard(`Coin ${letterFor(document.querySelectorAll('.coin-card').length)}`);
+    saveCoins();
+  });
   $('saveKeys').addEventListener('click', () => {
     saveSettings();
     $('saveKeys').textContent = '✓ Saved';
     setTimeout(() => ($('saveKeys').textContent = 'Save keys locally'), 1500);
   });
-  $('analyze').addEventListener('click', () => { saveSettings(); analyze(); });
+  $('analyze').addEventListener('click', () => { saveSettings(); saveCoins(); analyze(); });
   $('exportCsv').addEventListener('click', exportCsv);
   $('testConn').addEventListener('click', testConnection);
 });

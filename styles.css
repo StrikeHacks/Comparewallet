@@ -130,6 +130,37 @@ footer p { max-width: 620px; margin: 0 auto; }
 
 .empty { color: var(--muted); padding: 20px; text-align: center; }
 
+/* Per-coin input cards */
+#coinList { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.coin-card {
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.coin-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.coin-label {
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border);
+  color: var(--accent);
+  border-radius: 0;
+  padding: 2px 2px;
+  width: auto;
+  max-width: 60%;
+}
+.coin-label:focus { outline: none; border-bottom-color: var(--accent-2); }
+.coin-remove {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 1.2rem; line-height: 1; padding: 2px 8px; border-radius: 8px;
+}
+.coin-remove:hover { background: var(--card); color: var(--danger); }
+.coin-card .coin-ca { margin-bottom: 8px; }
+.coin-card .coin-tg { display: none; }
+.coin-card.show-tg .coin-tg { display: block; }
+#addCoin { margin-bottom: 8px; }
+
 .test-result { display: inline-block; margin-left: 10px; font-size: 0.85rem; }
 .test-result.ok { color: var(--accent); }
 .test-result.err { color: var(--danger); }

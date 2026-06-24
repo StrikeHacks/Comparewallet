@@ -62,12 +62,8 @@
     <!-- ============ INPUT ============ -->
     <section class="card">
       <div class="card-body">
-        <label class="field">
-          <span id="casHint">Contract addresses — one per line. Optionally add a label after a space or comma (e.g. <code>So111...  $YUI</code>)</span>
-          <textarea id="cas" rows="6" placeholder="7xKp...mint   $YUI
-9aBc...mint   $TRY
-EgQ...mint    $ANOTHER"></textarea>
-        </label>
+        <div id="coinList"></div>
+        <button id="addCoin" class="ghost">+ Add coin</button>
 
         <div class="controls" id="windowWrap" hidden>
           <label class="field inline">
@@ -80,11 +76,10 @@ EgQ...mint    $ANOTHER"></textarea>
           </label>
         </div>
         <p class="note" id="shillHint" hidden>
-          Paste one Telegram call per line. Easiest: just the link —
-          <code>https://t.me/somecaller/1234</code> — the tool reads both the <b>time</b> and the
-          <b>contract address</b> from the message. You can also give the CA yourself
-          (<code>mint &nbsp; t.me-link</code>), or type a time for private channels
-          (<code>mint &nbsp; 2024-06-20T14:30</code>). Trades are scanned in the window above.
+          Shill-time mode: fill the <b>Telegram link</b> box per coin — the tool reads the message
+          <b>time</b> and (if you leave the contract box empty) the <b>contract address</b> from it.
+          For private channels, leave the link box and instead type a time in it
+          (<code>2024-06-20T14:30</code>) plus the contract address in its own box.
         </p>
 
         <div class="controls">
