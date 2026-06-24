@@ -45,8 +45,9 @@ Three layers keep the results to genuine personal trader wallets:
 1. **Known-address list** — the *"Filter out known program / AMM / pool / burn addresses"* option removes liquidity pools, the pump.fun/Raydium programs, the burn address, etc. The list lives in `app.js` (`KNOWN_ADDRESSES`); add any address you want ignored.
 2. **Only real trader wallets** — when enabled, each overlapping wallet is looked up via Helius `getMultipleAccounts`; anything **not owned by the System Program** (i.e. LP vaults, program-derived accounts, AMM pools) is dropped. Only normal keypair wallets survive. Needs a Helius key.
 3. **Minimum SOL balance** — drops wallets holding less than the set amount of native SOL (default **5 SOL**), filtering out dust/throwaway accounts.
+4. **Exclude high-frequency bots / market makers** — looks up each survivor's recent signatures via `getSignaturesForAddress`; if a wallet did **1000+ transactions within 24h** it's a bot/MM (the "buys every second, millions in USDC" wallets), not a person, and is removed.
 
-Layers 2–3 run only on the small set of wallets that already passed the overlap threshold, so they stay fast. When active, the results table and CSV gain a **SOL** column.
+Layers 2–4 run only on the small set of wallets that already passed the overlap threshold, so they stay fast. When active, the results table and CSV gain a **SOL** column. Specific addresses can always be hard-blocked by adding them to `KNOWN_ADDRESSES` in `app.js`.
 
 ## Files
 

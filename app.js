@@ -30,6 +30,8 @@ const KNOWN_ADDRESSES = new Set([
   '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',    // Raydium Liquidity Pool V4
   'AdduY3tfV1KX5gDgw4SrMrtbS8aaH9pJzhx9YjpqHnXp',    // (common router)
   '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',    // Common CEX / hot wallet
+  'HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC',    // Market-maker / bot (user-reported)
+  'BM9CcyErJcu2mjrFvUsRRrD3snGeHDDVirJLvL6EjvMN',    // Market-maker / bot (user-reported)
 ]);
 
 const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
@@ -50,6 +52,8 @@ function loadSettings() {
   if (minSol !== null) $('minSol').value = minSol;
   const onlyReal = localStorage.getItem('cw_onlyreal');
   if (onlyReal !== null) $('onlyReal').checked = onlyReal === '1';
+  const exclBots = localStorage.getItem('cw_excludebots');
+  if (exclBots !== null) $('excludeBots').checked = exclBots === '1';
   toggleKeyFields();
 }
 function saveSettings() {
@@ -60,6 +64,7 @@ function saveSettings() {
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
   localStorage.setItem('cw_minsol', $('minSol').value);
   localStorage.setItem('cw_onlyreal', $('onlyReal').checked ? '1' : '0');
+  localStorage.setItem('cw_excludebots', $('excludeBots').checked ? '1' : '0');
 }
 
 function toggleKeyFields() {
@@ -269,6 +274,17 @@ async function enrichWallets(apiKey, addresses) {
   return info;
 }
 
+/* Detects high-frequency bots / market makers: a wallet that did `maxTx`
+ * transactions inside `windowHours` is not a person. Returns true if bot-like. */
+async function isHighFrequency(apiKey, addr, maxTx = 1000, windowHours = 24) {
+  const sigs = await heliusRpc(apiKey, 'getSignaturesForAddress', [addr, { limit: maxTx }]);
+  if (!Array.isArray(sigs) || sigs.length < maxTx) return false; // fewer than maxTx total → not hyperactive
+  const times = sigs.map((s) => s.blockTime).filter(Boolean);
+  if (times.length < 2) return false;
+  const spanHours = (Math.max(...times) - Math.min(...times)) / 3600;
+  return spanHours < windowHours;
+}
+
 /* ---- Helpers -------------------------------------------------------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -310,6 +326,7 @@ async function analyze() {
   let minSol = parseFloat($('minSol').value);
   if (isNaN(minSol) || minSol < 0) minSol = 0;
   const onlyReal = $('onlyReal').checked;
+  const excludeBots = $('excludeBots').checked;
 
   $('analyze').disabled = true;
   resetLog();
@@ -359,17 +376,17 @@ async function analyze() {
   rows.sort((a, b) => b.w.coins.size - a.w.coins.size || a.addr.localeCompare(b.addr));
   log(`\n✓ ${rows.length} wallets appear in ≥ ${threshold} of ${coins.length} coins.`, 'ok');
 
-  // Keep only real trader wallets with enough SOL.
+  // Keep only real trader wallets with enough SOL (and no high-frequency bots).
   let enriched = false;
-  if ((minSol > 0 || onlyReal) && rows.length > 0) {
+  if ((minSol > 0 || onlyReal || excludeBots) && rows.length > 0) {
     if (!heliusKey) {
-      log('Skipping SOL / wallet-type filter — needs a Helius key in Settings.', 'warn');
+      log('Skipping SOL / wallet-type / bot filter — needs a Helius key in Settings.', 'warn');
     } else {
       try {
         log(`\nChecking SOL balance & wallet type for ${rows.length} candidates…`);
         const info = await enrichWallets(heliusKey, rows.map((r) => r.addr));
         const minLamports = BigInt(Math.round(minSol * LAMPORTS_PER_SOL));
-        const kept = [];
+        let kept = [];
         let droppedType = 0;
         let droppedSol = 0;
         for (const row of rows) {
@@ -380,11 +397,29 @@ async function analyze() {
           kept.push(row);
         }
         enriched = true;
-        rows = kept;
         log(`  Kept ${kept.length}. Dropped ${droppedType} non-personal (LP/program) and ` +
             `${droppedSol} below ${minSol} SOL.`, 'ok');
+
+        // Bot / market-maker pass on the survivors.
+        if (excludeBots && kept.length > 0) {
+          log(`\nChecking ${kept.length} wallets for bot-like activity (1000+ tx/24h)…`);
+          const human = [];
+          let droppedBots = 0;
+          for (const row of kept) {
+            let bot = false;
+            try { bot = await isHighFrequency(heliusKey, row.addr); }
+            catch (e) { log(`  ${shorten(row.addr)}: activity check failed (${e.message})`, 'warn'); }
+            if (bot) { droppedBots++; log(`  ✗ ${shorten(row.addr)} looks like a bot/MM — removed`, 'warn'); }
+            else human.push(row);
+            await sleep(120);
+          }
+          kept = human;
+          log(`  Removed ${droppedBots} high-frequency bot/MM wallets.`, 'ok');
+        }
+
+        rows = kept;
       } catch (err) {
-        log(`  SOL / wallet-type filter failed: ${err.message}`, 'err');
+        log(`  Filter failed: ${err.message}`, 'err');
       }
     }
   }
