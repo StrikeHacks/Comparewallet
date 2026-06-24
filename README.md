@@ -33,7 +33,8 @@ No build step, no server. Just open `index.html` in your browser.
 | Mode | Source | What it finds | Notes |
 |------|--------|---------------|-------|
 | **Current holders** *(default)* | Helius `getTokenAccounts` | Wallets that **currently hold** each coin | Fast, reliable, complete snapshot. Best run while coins are actively being shilled. |
-| **Full trade history** | Bitquery `DEXTrades` | Every wallet that **ever bought or sold** — including wallets that already sold out | Needs a free [Bitquery access token](https://account.bitquery.io/user/api_v2/access_tokens). Heavier; catches dumpers. |
+| **Trade history (Birdeye)** | Birdeye `defi/txs/token` | Wallets that **bought or sold** (the `owner` of each swap) — including wallets that already sold out | Needs a free [Birdeye API key](https://bds.birdeye.so). Scans the most recent trades (up to Birdeye's 10k cap), ~1 req/sec on the free tier so large coins take a while. |
+| **Full trade history (Bitquery)** | Bitquery `DEXTrades` | Every wallet that **ever bought or sold** — including wallets that already sold out | Needs a free [Bitquery access token](https://account.bitquery.io/user/api_v2/access_tokens). Heavier; deepest history. |
 
 **Why two modes?** On Solana, the set of *current* holders is cheap and exact to query. The set of *everyone who ever traded* (catching a shiller who already dumped) needs a full DEX-trade indexer — that's what the Bitquery mode is for. Start with Current holders; switch to Full trade history when you need past sellers too.
 

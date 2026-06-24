@@ -26,8 +26,14 @@
           <span>Data mode</span>
           <select id="mode">
             <option value="holders">Current holders (Helius) — reliable, recommended</option>
+            <option value="birdeye">Trade history (Birdeye) — also catches wallets that already sold</option>
             <option value="trades">Full trade history (Bitquery) — also catches wallets that already sold</option>
           </select>
+        </label>
+
+        <label class="field" id="birdeyeField" hidden>
+          <span>Birdeye API key <a href="https://bds.birdeye.so" target="_blank" rel="noreferrer">(get a free key)</a></span>
+          <input type="password" id="birdeyeKey" placeholder="paste your Birdeye API key" autocomplete="off" />
         </label>
 
         <label class="field" id="bitqueryField" hidden>

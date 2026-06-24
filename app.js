@@ -38,21 +38,25 @@ const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 function loadSettings() {
   $('heliusKey').value = localStorage.getItem('cw_helius') || DEFAULT_HELIUS_KEY;
   $('bitqueryKey').value = localStorage.getItem('cw_bitquery') || '';
+  $('birdeyeKey').value = localStorage.getItem('cw_birdeye') || '';
   const mode = localStorage.getItem('cw_mode');
   if (mode) $('mode').value = mode;
   const excl = localStorage.getItem('cw_exclude');
   if (excl !== null) $('excludeKnown').checked = excl === '1';
-  toggleBitqueryField();
+  toggleKeyFields();
 }
 function saveSettings() {
   localStorage.setItem('cw_helius', $('heliusKey').value.trim());
   localStorage.setItem('cw_bitquery', $('bitqueryKey').value.trim());
+  localStorage.setItem('cw_birdeye', $('birdeyeKey').value.trim());
   localStorage.setItem('cw_mode', $('mode').value);
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
 }
 
-function toggleBitqueryField() {
-  $('bitqueryField').hidden = $('mode').value !== 'trades';
+function toggleKeyFields() {
+  const mode = $('mode').value;
+  $('bitqueryField').hidden = mode !== 'trades';
+  $('birdeyeField').hidden = mode !== 'birdeye';
 }
 
 /* ---- Logging -------------------------------------------------------------- */
@@ -196,6 +200,42 @@ async function fetchTraders(token, mint, label) {
   return wallets;
 }
 
+/* ===========================================================================
+ * Engine 3 — trade history via Birdeye /defi/txs/token
+ * Collects the `owner` (trader wallet) of every swap on the token, so it
+ * captures wallets that have already sold out.
+ * ===========================================================================*/
+async function fetchTradersBirdeye(apiKey, mint, label) {
+  const wallets = new Map();
+  const limit = 50; // Birdeye max page size for this endpoint
+  let offset = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const url = `https://public-api.birdeye.so/defi/txs/token?address=${encodeURIComponent(mint)}` +
+                `&offset=${offset}&limit=${limit}&tx_type=swap&sort_type=desc`;
+    const res = await fetch(url, {
+      headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' },
+    });
+    if (res.status === 429) { log('  Rate limited — waiting 3s…', 'warn'); await sleep(3000); continue; }
+    if (!res.ok) throw new Error(`Birdeye HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.success === false) throw new Error(json.message || 'Birdeye request failed');
+    const items = json?.data?.items || [];
+    if (items.length === 0) break;
+    for (const it of items) {
+      const w = it.owner || it.from?.owner || it.to?.owner;
+      if (w) wallets.set(w, 0n);
+    }
+    log(`  ${label}: ${offset + items.length} trades scanned → ${wallets.size} unique traders`);
+    if (items.length < limit) break;
+    offset += limit;
+    // Birdeye caps offset+limit at 10000 for this endpoint.
+    if (offset >= 10000) { log('  Reached Birdeye 10k-trade cap (most recent trades).', 'warn'); break; }
+    await sleep(1100); // free tier ≈ 1 request/second
+  }
+  return wallets;
+}
+
 /* ---- Helpers -------------------------------------------------------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -225,8 +265,10 @@ async function analyze() {
 
   const heliusKey = $('heliusKey').value.trim();
   const bitqueryKey = $('bitqueryKey').value.trim();
+  const birdeyeKey = $('birdeyeKey').value.trim();
   if (mode === 'holders' && !heliusKey) { alert('Enter your Helius API key in Settings.'); return; }
   if (mode === 'trades' && !bitqueryKey) { alert('Enter your Bitquery access token in Settings.'); return; }
+  if (mode === 'birdeye' && !birdeyeKey) { alert('Enter your Birdeye API key in Settings.'); return; }
 
   let threshold = parseInt($('threshold').value, 10);
   if (isNaN(threshold) || threshold < 2) threshold = 2;
@@ -250,6 +292,8 @@ async function analyze() {
       if (mode === 'holders') {
         decimals = await getDecimals(heliusKey, mint);
         owners = await fetchHolders(heliusKey, mint, label);
+      } else if (mode === 'birdeye') {
+        owners = await fetchTradersBirdeye(birdeyeKey, mint, label);
       } else {
         owners = await fetchTraders(bitqueryKey, mint, label);
       }
@@ -359,7 +403,7 @@ function csvCell(v) {
 /* ---- Wire up -------------------------------------------------------------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
-  $('mode').addEventListener('change', toggleBitqueryField);
+  $('mode').addEventListener('change', toggleKeyFields);
   $('saveKeys').addEventListener('click', () => {
     saveSettings();
     $('saveKeys').textContent = '✓ Saved';
