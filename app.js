@@ -38,6 +38,7 @@ const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const LAMPORTS_PER_SOL = 1_000_000_000;
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 /* ---- Persisted settings --------------------------------------------------- */
 function loadSettings() {
@@ -50,6 +51,8 @@ function loadSettings() {
   if (excl !== null) $('excludeKnown').checked = excl === '1';
   const minSol = localStorage.getItem('cw_minsol');
   if (minSol !== null) $('minSol').value = minSol;
+  const maxUsdc = localStorage.getItem('cw_maxusdc');
+  if (maxUsdc !== null) $('maxUsdc').value = maxUsdc;
   const onlyReal = localStorage.getItem('cw_onlyreal');
   if (onlyReal !== null) $('onlyReal').checked = onlyReal === '1';
   const exclBots = localStorage.getItem('cw_excludebots');
@@ -63,6 +66,7 @@ function saveSettings() {
   localStorage.setItem('cw_mode', $('mode').value);
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
   localStorage.setItem('cw_minsol', $('minSol').value);
+  localStorage.setItem('cw_maxusdc', $('maxUsdc').value);
   localStorage.setItem('cw_onlyreal', $('onlyReal').checked ? '1' : '0');
   localStorage.setItem('cw_excludebots', $('excludeBots').checked ? '1' : '0');
 }
@@ -285,6 +289,18 @@ async function isHighFrequency(apiKey, addr, maxTx = 1000, windowHours = 24) {
   return spanHours < windowHours;
 }
 
+/* Returns a wallet's total USDC balance (uiAmount) across its token accounts. */
+async function getUsdcBalance(apiKey, addr) {
+  const res = await heliusRpc(apiKey, 'getTokenAccountsByOwner',
+    [addr, { mint: USDC_MINT }, { encoding: 'jsonParsed' }]);
+  let total = 0;
+  for (const a of res?.value || []) {
+    const ui = a?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+    if (typeof ui === 'number') total += ui;
+  }
+  return total;
+}
+
 /* ---- Helpers -------------------------------------------------------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -325,6 +341,8 @@ async function analyze() {
 
   let minSol = parseFloat($('minSol').value);
   if (isNaN(minSol) || minSol < 0) minSol = 0;
+  let maxUsdc = parseFloat($('maxUsdc').value);
+  if (isNaN(maxUsdc) || maxUsdc < 0) maxUsdc = 0; // 0 = no cap
   const onlyReal = $('onlyReal').checked;
   const excludeBots = $('excludeBots').checked;
 
@@ -378,9 +396,9 @@ async function analyze() {
 
   // Keep only real trader wallets with enough SOL (and no high-frequency bots).
   let enriched = false;
-  if ((minSol > 0 || onlyReal || excludeBots) && rows.length > 0) {
+  if ((minSol > 0 || onlyReal || excludeBots || maxUsdc > 0) && rows.length > 0) {
     if (!heliusKey) {
-      log('Skipping SOL / wallet-type / bot filter — needs a Helius key in Settings.', 'warn');
+      log('Skipping SOL / wallet-type / bot / USDC filter — needs a Helius key in Settings.', 'warn');
     } else {
       try {
         log(`\nChecking SOL balance & wallet type for ${rows.length} candidates…`);
@@ -400,21 +418,38 @@ async function analyze() {
         log(`  Kept ${kept.length}. Dropped ${droppedType} non-personal (LP/program) and ` +
             `${droppedSol} below ${minSol} SOL.`, 'ok');
 
-        // Bot / market-maker pass on the survivors.
-        if (excludeBots && kept.length > 0) {
-          log(`\nChecking ${kept.length} wallets for bot-like activity (1000+ tx/24h)…`);
+        // Behavioural pass on the survivors: USDC whale cap + bot/MM activity.
+        if ((excludeBots || maxUsdc > 0) && kept.length > 0) {
+          log(`\nChecking ${kept.length} wallets` +
+              `${maxUsdc > 0 ? ` for USDC ≥ ${maxUsdc.toLocaleString('en-US')}` : ''}` +
+              `${excludeBots ? `${maxUsdc > 0 ? ' and' : ' for'} bot-like activity (1000+ tx/24h)` : ''}…`);
           const human = [];
           let droppedBots = 0;
+          let droppedWhales = 0;
           for (const row of kept) {
-            let bot = false;
-            try { bot = await isHighFrequency(heliusKey, row.addr); }
-            catch (e) { log(`  ${shorten(row.addr)}: activity check failed (${e.message})`, 'warn'); }
-            if (bot) { droppedBots++; log(`  ✗ ${shorten(row.addr)} looks like a bot/MM — removed`, 'warn'); }
-            else human.push(row);
             await sleep(120);
+            // USDC whale check
+            if (maxUsdc > 0) {
+              try {
+                row.usdc = await getUsdcBalance(heliusKey, row.addr);
+                if (row.usdc >= maxUsdc) {
+                  droppedWhales++;
+                  log(`  ✗ ${shorten(row.addr)} holds ${row.usdc.toLocaleString('en-US')} USDC — removed`, 'warn');
+                  continue;
+                }
+              } catch (e) { log(`  ${shorten(row.addr)}: USDC check failed (${e.message})`, 'warn'); }
+            }
+            // bot / market-maker check
+            if (excludeBots) {
+              let bot = false;
+              try { bot = await isHighFrequency(heliusKey, row.addr); }
+              catch (e) { log(`  ${shorten(row.addr)}: activity check failed (${e.message})`, 'warn'); }
+              if (bot) { droppedBots++; log(`  ✗ ${shorten(row.addr)} looks like a bot/MM — removed`, 'warn'); continue; }
+            }
+            human.push(row);
           }
           kept = human;
-          log(`  Removed ${droppedBots} high-frequency bot/MM wallets.`, 'ok');
+          log(`  Removed ${droppedWhales} USDC whales and ${droppedBots} bot/MM wallets.`, 'ok');
         }
 
         rows = kept;
