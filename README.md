@@ -51,43 +51,6 @@ Three layers keep the results to genuine personal trader wallets:
 
 Layers 2–5 run only on the small set of wallets that already passed the overlap threshold, so they stay fast. When active, the results table and CSV gain a **SOL** column. Specific addresses can always be hard-blocked by adding them to `KNOWN_ADDRESSES` in `app.js`.
 
-## Birdeye CORS proxy
-
-Browsers can't call the Birdeye API directly (CORS), so the Birdeye **Trade history** and **Shill-time** modes route requests through a proxy. The **"CORS proxy for Birdeye"** field in Settings defaults to a public proxy (`https://corsproxy.io/?url=`) which works out of the box but can be slow/rate-limited, and your key passes through a third party.
-
-For a reliable, private proxy, deploy a free **Cloudflare Worker** and paste its URL (ending in `?url=`) into that field:
-
-```js
-export default {
-  async fetch(request) {
-    const cors = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    };
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    const target = new URL(request.url).searchParams.get('url');
-    if (!target) return new Response('missing ?url=', { status: 400, headers: cors });
-    // Forward only the headers Birdeye needs (so the API key actually arrives).
-    const h = new Headers();
-    for (const k of ['x-api-key', 'x-chain', 'accept', 'content-type']) {
-      const v = request.headers.get(k);
-      if (v) h.set(k, v);
-    }
-    const resp = await fetch(target, {
-      method: request.method,
-      headers: h,
-      body: request.method === 'POST' ? await request.text() : undefined,
-    });
-    const out = new Response(resp.body, resp);
-    for (const [k, v] of Object.entries(cors)) out.headers.set(k, v);
-    return out;
-  }
-}
-```
-
-Steps: dash.cloudflare.com → Workers & Pages → Create → Worker → Deploy → Edit code → paste the code above → Deploy. Then set the **CORS proxy** field in Settings to `https://<your-worker>.workers.dev/?url=`. The key only ever passes through your own worker. (A public proxy like corsproxy.io often strips the `X-API-KEY` header, which is why Birdeye returns 401.)
-
 ## Files
 
 - `index.html` — UI
