@@ -34,6 +34,9 @@ const KNOWN_ADDRESSES = new Set([
 
 const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+const LAMPORTS_PER_SOL = 1_000_000_000;
+
 /* ---- Persisted settings --------------------------------------------------- */
 function loadSettings() {
   $('heliusKey').value = localStorage.getItem('cw_helius') || DEFAULT_HELIUS_KEY;
@@ -43,6 +46,10 @@ function loadSettings() {
   if (mode) $('mode').value = mode;
   const excl = localStorage.getItem('cw_exclude');
   if (excl !== null) $('excludeKnown').checked = excl === '1';
+  const minSol = localStorage.getItem('cw_minsol');
+  if (minSol !== null) $('minSol').value = minSol;
+  const onlyReal = localStorage.getItem('cw_onlyreal');
+  if (onlyReal !== null) $('onlyReal').checked = onlyReal === '1';
   toggleKeyFields();
 }
 function saveSettings() {
@@ -51,6 +58,8 @@ function saveSettings() {
   localStorage.setItem('cw_birdeye', $('birdeyeKey').value.trim());
   localStorage.setItem('cw_mode', $('mode').value);
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
+  localStorage.setItem('cw_minsol', $('minSol').value);
+  localStorage.setItem('cw_onlyreal', $('onlyReal').checked ? '1' : '0');
 }
 
 function toggleKeyFields() {
@@ -236,6 +245,30 @@ async function fetchTradersBirdeye(apiKey, mint, label) {
   return wallets;
 }
 
+/* ===========================================================================
+ * Wallet enrichment — SOL balance + account owner, to keep only real
+ * person-controlled trader wallets (and drop LP pools / vaults / programs).
+ * Runs only on the small overlap candidate set, batched via getMultipleAccounts.
+ * ===========================================================================*/
+async function enrichWallets(apiKey, addresses) {
+  const info = new Map(); // addr -> { lamports: BigInt, owner: string|null }
+  const batchSize = 100;
+  for (let i = 0; i < addresses.length; i += batchSize) {
+    const batch = addresses.slice(i, i + batchSize);
+    const res = await heliusRpc(apiKey, 'getMultipleAccounts', [batch, { encoding: 'base64' }]);
+    const vals = res?.value || [];
+    batch.forEach((addr, j) => {
+      const v = vals[j];
+      info.set(addr, v
+        ? { lamports: BigInt(v.lamports || 0), owner: v.owner }
+        : { lamports: 0n, owner: null });
+    });
+    log(`  checked ${Math.min(i + batchSize, addresses.length)}/${addresses.length} wallets`);
+    await sleep(120);
+  }
+  return info;
+}
+
 /* ---- Helpers -------------------------------------------------------------- */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -273,6 +306,10 @@ async function analyze() {
   let threshold = parseInt($('threshold').value, 10);
   if (isNaN(threshold) || threshold < 2) threshold = 2;
   if (threshold > coins.length) threshold = coins.length;
+
+  let minSol = parseFloat($('minSol').value);
+  if (isNaN(minSol) || minSol < 0) minSol = 0;
+  const onlyReal = $('onlyReal').checked;
 
   $('analyze').disabled = true;
   resetLog();
@@ -315,24 +352,55 @@ async function analyze() {
   }
 
   // Filter by threshold and sort by overlap count desc.
-  const rows = [];
+  let rows = [];
   for (const [addr, w] of wallets) {
     if (w.coins.size >= threshold) rows.push({ addr, w });
   }
   rows.sort((a, b) => b.w.coins.size - a.w.coins.size || a.addr.localeCompare(b.addr));
+  log(`\n✓ ${rows.length} wallets appear in ≥ ${threshold} of ${coins.length} coins.`, 'ok');
 
-  log(`\n✓ Done. ${rows.length} wallets appear in ≥ ${threshold} of ${coins.length} coins.`, 'ok');
-  lastResults = { coins, rows, mode, decimalsByCoin };
+  // Keep only real trader wallets with enough SOL.
+  let enriched = false;
+  if ((minSol > 0 || onlyReal) && rows.length > 0) {
+    if (!heliusKey) {
+      log('Skipping SOL / wallet-type filter — needs a Helius key in Settings.', 'warn');
+    } else {
+      try {
+        log(`\nChecking SOL balance & wallet type for ${rows.length} candidates…`);
+        const info = await enrichWallets(heliusKey, rows.map((r) => r.addr));
+        const minLamports = BigInt(Math.round(minSol * LAMPORTS_PER_SOL));
+        const kept = [];
+        let droppedType = 0;
+        let droppedSol = 0;
+        for (const row of rows) {
+          const v = info.get(row.addr) || { lamports: 0n, owner: null };
+          row.sol = Number(v.lamports) / LAMPORTS_PER_SOL;
+          if (onlyReal && v.owner !== SYSTEM_PROGRAM) { droppedType++; continue; } // LP/vault/program/PDA
+          if (v.lamports < minLamports) { droppedSol++; continue; }
+          kept.push(row);
+        }
+        enriched = true;
+        rows = kept;
+        log(`  Kept ${kept.length}. Dropped ${droppedType} non-personal (LP/program) and ` +
+            `${droppedSol} below ${minSol} SOL.`, 'ok');
+      } catch (err) {
+        log(`  SOL / wallet-type filter failed: ${err.message}`, 'err');
+      }
+    }
+  }
+
+  log(`\n✓ Done. ${rows.length} wallets match all filters.`, 'ok');
+  lastResults = { coins, rows, mode, decimalsByCoin, enriched };
   renderResults(lastResults);
   $('analyze').disabled = false;
 }
 
 /* ---- Rendering ------------------------------------------------------------ */
-function renderResults({ coins, rows, mode, decimalsByCoin }) {
+function renderResults({ coins, rows, mode, decimalsByCoin, enriched }) {
   $('resultsCard').hidden = false;
   $('resultsTitle').textContent =
-    `${rows.length} overlapping wallet${rows.length === 1 ? '' : 's'} ` +
-    `(${mode === 'holders' ? 'current holders' : 'all-time traders'})`;
+    `${rows.length} matching wallet${rows.length === 1 ? '' : 's'} ` +
+    `(${mode === 'holders' ? 'current holders' : 'traders'})`;
 
   const thead = $('resultsTable').querySelector('thead');
   const tbody = $('resultsTable').querySelector('tbody');
@@ -340,13 +408,14 @@ function renderResults({ coins, rows, mode, decimalsByCoin }) {
   tbody.innerHTML = '';
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td><div class="empty">No wallets met the overlap threshold. Try lowering it.</div></td></tr>`;
+    tbody.innerHTML = `<tr><td><div class="empty">No wallets matched. Try lowering the overlap threshold or the minimum SOL.</div></td></tr>`;
     return;
   }
 
   // Header
   const htr = document.createElement('tr');
-  htr.innerHTML = `<th>#</th><th>Wallet</th><th>Coins</th><th>Which coins ${mode === 'holders' ? '(balance)' : ''}</th>`;
+  htr.innerHTML = `<th>#</th><th>Wallet</th>${enriched ? '<th>SOL</th>' : ''}<th>Coins</th>` +
+    `<th>Which coins ${mode === 'holders' ? '(balance)' : ''}</th>`;
   thead.appendChild(htr);
 
   rows.forEach((row, idx) => {
@@ -359,9 +428,14 @@ function renderResults({ coins, rows, mode, decimalsByCoin }) {
       return `<span class="pill hit">${escapeHtml(c.label)}${amt ? ` · ${amt}` : ''}</span>`;
     }).join('');
 
+    const solCell = enriched
+      ? `<td>${row.sol != null ? row.sol.toLocaleString('en-US', { maximumFractionDigits: 2 }) : '—'}</td>`
+      : '';
+
     tr.innerHTML =
       `<td>${idx + 1}</td>` +
       `<td class="addr"><a href="${SOLSCAN(row.addr)}" target="_blank" rel="noreferrer">${shorten(row.addr)}</a></td>` +
+      solCell +
       `<td><span class="count-badge">${row.w.coins.size}/${coins.length}</span></td>` +
       `<td>${pills}</td>`;
     tbody.appendChild(tr);
@@ -376,11 +450,12 @@ function escapeHtml(s) {
 /* ---- CSV export ----------------------------------------------------------- */
 function exportCsv() {
   if (!lastResults || lastResults.rows.length === 0) return;
-  const { coins, rows, mode, decimalsByCoin } = lastResults;
-  const header = ['wallet', 'coins_count', ...coins.map((c) => c.label)];
+  const { coins, rows, mode, decimalsByCoin, enriched } = lastResults;
+  const header = ['wallet', 'coins_count', ...(enriched ? ['sol_balance'] : []), ...coins.map((c) => c.label)];
   const lines = [header.join(',')];
   for (const row of rows) {
     const cells = [row.addr, row.w.coins.size];
+    if (enriched) cells.push(row.sol != null ? row.sol.toFixed(3) : '');
     coins.forEach((c, i) => {
       if (!row.w.coins.has(i)) { cells.push(''); return; }
       cells.push(mode === 'holders' ? fmtAmount(row.w.amounts.get(i) || 0n, decimalsByCoin[i]).replace(/,/g, '') : 'yes');

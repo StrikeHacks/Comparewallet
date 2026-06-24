@@ -65,12 +65,20 @@ EgQ...mint    $ANOTHER"></textarea>
 
         <div class="controls">
           <label class="field inline">
-            <span>Show wallets present in at least</span>
+            <span>Show wallets in at least</span>
             <input type="number" id="threshold" min="2" value="2" />
             <span>coins</span>
           </label>
+          <label class="field inline">
+            <span>Min. SOL balance</span>
+            <input type="number" id="minSol" min="0" step="0.1" value="5" />
+          </label>
           <button id="analyze" class="primary">Analyze overlap</button>
         </div>
+        <label class="check">
+          <input type="checkbox" id="onlyReal" checked />
+          <span>Only real trader wallets — exclude LP pools, vaults &amp; program accounts (needs Helius key)</span>
+        </label>
       </div>
     </section>
 

@@ -38,9 +38,15 @@ No build step, no server. Just open `index.html` in your browser.
 
 **Why two modes?** On Solana, the set of *current* holders is cheap and exact to query. The set of *everyone who ever traded* (catching a shiller who already dumped) needs a full DEX-trade indexer — that's what the Bitquery mode is for. Start with Current holders; switch to Full trade history when you need past sellers too.
 
-## Filtering noise
+## Filtering down to real traders
 
-The **"Filter out known program / AMM / pool / burn addresses"** option (on by default) removes liquidity pools, the pump.fun/Raydium programs, the burn address, etc., so the results are actual user wallets. The list is in `app.js` (`KNOWN_ADDRESSES`) — add any address you want ignored.
+Three layers keep the results to genuine personal trader wallets:
+
+1. **Known-address list** — the *"Filter out known program / AMM / pool / burn addresses"* option removes liquidity pools, the pump.fun/Raydium programs, the burn address, etc. The list lives in `app.js` (`KNOWN_ADDRESSES`); add any address you want ignored.
+2. **Only real trader wallets** — when enabled, each overlapping wallet is looked up via Helius `getMultipleAccounts`; anything **not owned by the System Program** (i.e. LP vaults, program-derived accounts, AMM pools) is dropped. Only normal keypair wallets survive. Needs a Helius key.
+3. **Minimum SOL balance** — drops wallets holding less than the set amount of native SOL (default **5 SOL**), filtering out dust/throwaway accounts.
+
+Layers 2–3 run only on the small set of wallets that already passed the overlap threshold, so they stay fast. When active, the results table and CSV gain a **SOL** column.
 
 ## Files
 
