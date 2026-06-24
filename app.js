@@ -13,6 +13,11 @@
 
 const $ = (id) => document.getElementById(id);
 
+/* Default Helius key (repo is private). Override anytime in Settings. */
+const DEFAULT_HELIUS_KEY = '235607da-5b6f-46c2-9957-a21f2b6306ca';
+/* A mint that always has holders, used by the "Test connection" button. */
+const TEST_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; // USDC
+
 /* ---- Known non-wallet addresses to optionally filter out (noise) ---------- */
 const KNOWN_ADDRESSES = new Set([
   '11111111111111111111111111111111',               // System program
@@ -31,7 +36,7 @@ const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 
 /* ---- Persisted settings --------------------------------------------------- */
 function loadSettings() {
-  $('heliusKey').value = localStorage.getItem('cw_helius') || '';
+  $('heliusKey').value = localStorage.getItem('cw_helius') || DEFAULT_HELIUS_KEY;
   $('bitqueryKey').value = localStorage.getItem('cw_bitquery') || '';
   const mode = localStorage.getItem('cw_mode');
   if (mode) $('mode').value = mode;
@@ -362,4 +367,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('analyze').addEventListener('click', () => { saveSettings(); analyze(); });
   $('exportCsv').addEventListener('click', exportCsv);
+  $('testConn').addEventListener('click', testConnection);
 });
+
+/* ---- Test connection ------------------------------------------------------ */
+async function testConnection() {
+  const out = $('testResult');
+  const key = $('heliusKey').value.trim();
+  if (!key) { out.textContent = 'Enter a Helius key first.'; out.className = 'test-result err'; return; }
+  out.textContent = 'Testing…'; out.className = 'test-result';
+  $('testConn').disabled = true;
+  try {
+    const t0 = performance.now();
+    const supply = await heliusRpc(key, 'getTokenSupply', [TEST_MINT]);
+    const accts = await heliusRpc(key, 'getTokenAccounts', { mint: TEST_MINT, page: 1, limit: 1 });
+    const ms = Math.round(performance.now() - t0);
+    const ok = supply?.value && Array.isArray(accts?.token_accounts);
+    if (ok) {
+      out.textContent = `✓ Connected — Helius key works (getTokenSupply + getTokenAccounts OK, ${ms}ms).`;
+      out.className = 'test-result ok';
+    } else {
+      out.textContent = '⚠ Connected but unexpected response — getTokenAccounts (DAS) may not be enabled on this key.';
+      out.className = 'test-result warn';
+    }
+  } catch (err) {
+    out.textContent = `✗ ${err.message}`;
+    out.className = 'test-result err';
+  } finally {
+    $('testConn').disabled = false;
+  }
+}

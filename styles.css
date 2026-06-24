@@ -129,3 +129,8 @@ footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top:
 footer p { max-width: 620px; margin: 0 auto; }
 
 .empty { color: var(--muted); padding: 20px; text-align: center; }
+
+.test-result { display: inline-block; margin-left: 10px; font-size: 0.85rem; }
+.test-result.ok { color: var(--accent); }
+.test-result.err { color: var(--danger); }
+.test-result.warn { color: var(--warn); }
