@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CompareWallet — Solana Coin Overlap Analyzer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>🔍 CompareWallet</h1>
+      <p class="tag">Paste 2+ Solana contract addresses and find the wallets that appear in <em>all</em> of them — the coordinated shillers / bundled wallets.</p>
+    </header>
+
+    <!-- ============ SETTINGS ============ -->
+    <details class="card" id="settings" open>
+      <summary>⚙️ Settings &amp; API keys</summary>
+      <div class="card-body">
+        <label class="field">
+          <span>Helius API key <a href="https://dashboard.helius.dev" target="_blank" rel="noreferrer">(get a free key)</a></span>
+          <input type="password" id="heliusKey" placeholder="paste your Helius API key" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span>Data mode</span>
+          <select id="mode">
+            <option value="holders">Current holders (Helius) — reliable, recommended</option>
+            <option value="trades">Full trade history (Bitquery) — also catches wallets that already sold</option>
+          </select>
+        </label>
+
+        <label class="field" id="bitqueryField" hidden>
+          <span>Bitquery access token <a href="https://account.bitquery.io/user/api_v2/access_tokens" target="_blank" rel="noreferrer">(get a free token)</a></span>
+          <input type="password" id="bitqueryKey" placeholder="paste your Bitquery v2 access token" autocomplete="off" />
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="excludeKnown" checked />
+          <span>Filter out known program / AMM / pool / burn addresses (recommended)</span>
+        </label>
+
+        <button id="saveKeys" class="ghost">Save keys locally</button>
+        <p class="note">Keys are stored only in your browser (localStorage). They are sent directly to Helius/Bitquery and never to any other server.</p>
+      </div>
+    </details>
+
+    <!-- ============ INPUT ============ -->
+    <section class="card">
+      <div class="card-body">
+        <label class="field">
+          <span>Contract addresses — one per line. Optionally add a label after a space or comma (e.g. <code>So111...  $YUI</code>)</span>
+          <textarea id="cas" rows="6" placeholder="7xKp...mint   $YUI
+9aBc...mint   $TRY
+EgQ...mint    $ANOTHER"></textarea>
+        </label>
+
+        <div class="controls">
+          <label class="field inline">
+            <span>Show wallets present in at least</span>
+            <input type="number" id="threshold" min="2" value="2" />
+            <span>coins</span>
+          </label>
+          <button id="analyze" class="primary">Analyze overlap</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PROGRESS ============ -->
+    <section class="card" id="progressCard" hidden>
+      <div class="card-body">
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section class="card" id="resultsCard" hidden>
+      <div class="card-body">
+        <div class="results-head">
+          <h2 id="resultsTitle">Results</h2>
+          <button id="exportCsv" class="ghost">⬇ Export CSV</button>
+        </div>
+        <div class="table-scroll">
+          <table id="resultsTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <p>Not financial advice. Data from Helius / Bitquery public APIs. "Current holders" is a live snapshot — run during active shilling to catch the overlap.</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
