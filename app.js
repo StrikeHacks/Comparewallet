@@ -55,6 +55,10 @@ function loadSettings() {
   if (maxUsdc !== null) $('maxUsdc').value = maxUsdc;
   const maxTrades = localStorage.getItem('cw_maxtrades');
   if (maxTrades !== null) $('maxTrades').value = maxTrades;
+  const hb = localStorage.getItem('cw_hoursbefore');
+  if (hb !== null) $('hoursBefore').value = hb;
+  const ha = localStorage.getItem('cw_hoursafter');
+  if (ha !== null) $('hoursAfter').value = ha;
   const onlyReal = localStorage.getItem('cw_onlyreal');
   if (onlyReal !== null) $('onlyReal').checked = onlyReal === '1';
   const exclBots = localStorage.getItem('cw_excludebots');
@@ -70,6 +74,8 @@ function saveSettings() {
   localStorage.setItem('cw_minsol', $('minSol').value);
   localStorage.setItem('cw_maxusdc', $('maxUsdc').value);
   localStorage.setItem('cw_maxtrades', $('maxTrades').value);
+  localStorage.setItem('cw_hoursbefore', $('hoursBefore').value);
+  localStorage.setItem('cw_hoursafter', $('hoursAfter').value);
   localStorage.setItem('cw_onlyreal', $('onlyReal').checked ? '1' : '0');
   localStorage.setItem('cw_excludebots', $('excludeBots').checked ? '1' : '0');
 }
@@ -77,8 +83,10 @@ function saveSettings() {
 function toggleKeyFields() {
   const mode = $('mode').value;
   $('bitqueryField').hidden = mode !== 'trades';
-  $('birdeyeField').hidden = mode !== 'birdeye';
+  $('birdeyeField').hidden = mode !== 'birdeye' && mode !== 'shilltime'; // both use Birdeye
   $('maxTradesWrap').hidden = mode === 'holders'; // only relevant for trade-history modes
+  $('windowWrap').hidden = mode !== 'shilltime';
+  $('shillHint').hidden = mode !== 'shilltime';
 }
 
 /* ---- Logging -------------------------------------------------------------- */
@@ -118,6 +126,23 @@ function parseInputs() {
 
 function shorten(addr) {
   return addr.length > 12 ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : addr;
+}
+
+// Shill-time lines: "<mint>  <t.me-link-or-time>  [label]". The time source is
+// the first non-space token after the mint (links/ISO times contain no spaces).
+function parseShillInputs() {
+  const lines = $('cas').value.split('\n').map((l) => l.trim()).filter(Boolean);
+  const coins = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const m = line.match(/^([1-9A-HJ-NP-Za-km-z]{32,44})[\s,]+(\S+)(?:[\s,]+(.*))?$/);
+    if (!m) { log(`Skipping line (need "mint  t.me-link"): ${line}`, 'warn'); continue; }
+    const mint = m[1];
+    if (seen.has(mint)) continue;
+    seen.add(mint);
+    coins.push({ mint, src: m[2], label: (m[3] || '').trim() || shorten(mint) });
+  }
+  return coins;
 }
 
 /* ===========================================================================
@@ -276,6 +301,74 @@ async function fetchTradersBirdeye(apiKey, mint, label, maxTrades) {
 }
 
 /* ===========================================================================
+ * Engine 3b — "shill-time window": traders within [after, before] via Birdeye
+ * seek_by_time. Only pulls the window, so it's naturally bounded and fast.
+ * ===========================================================================*/
+async function fetchTradersBirdeyeWindow(apiKey, mint, label, afterTime, beforeTime, maxTrades) {
+  const wallets = new Map();
+  const limit = 50;
+  const hardCap = Math.min(maxTrades || 5000, 10000);
+  let offset = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const url = `https://public-api.birdeye.so/defi/txs/token/seek_by_time?address=${encodeURIComponent(mint)}` +
+                `&offset=${offset}&limit=${limit}&tx_type=swap&after_time=${afterTime}&before_time=${beforeTime}`;
+    let res;
+    try {
+      res = await fetch(url, { headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' } });
+    } catch (e) {
+      throw new Error(`Could not reach Birdeye (network/CORS). (${e.message})`);
+    }
+    if (res.status === 429) { log('  Rate limited — waiting 3s…', 'warn'); await sleep(3000); continue; }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Birdeye rejected the API key (HTTP ${res.status}).`);
+    }
+    if (!res.ok) throw new Error(`Birdeye HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.success === false) throw new Error(json.message || 'Birdeye request failed');
+    const items = json?.data?.items || [];
+    if (items.length === 0) break;
+    for (const it of items) {
+      const w = it.owner || it.from?.owner || it.to?.owner;
+      if (w) wallets.set(w, 0n);
+    }
+    log(`  ${label}: ${offset + items.length} window-trades → ${wallets.size} unique traders`);
+    const hasNext = json?.data?.hasNext;
+    if (hasNext === false || items.length < limit) break;
+    offset += limit;
+    if (offset >= hardCap) { log(`  Hit ${hardCap}-trade cap for this window.`, 'warn'); break; }
+    await sleep(1100);
+  }
+  return wallets;
+}
+
+/* Resolve a "time source" to a unix-second timestamp: either a public t.me
+ * message link (scraped via a CORS proxy) or a typed date / unix value. */
+async function resolveTimeSource(src) {
+  if (/^https?:\/\/t\.me\//i.test(src)) return resolveTelegramTime(src);
+  if (/^\d{9,11}$/.test(src)) return parseInt(src, 10);           // raw unix seconds
+  const ts = Date.parse(src.replace('_', 'T'));                   // typed datetime, e.g. 2024-06-20T14:30
+  if (!isNaN(ts)) return Math.floor(ts / 1000);
+  throw new Error(`not a t.me link or a recognizable date: "${src}"`);
+}
+
+async function resolveTelegramTime(link) {
+  const embed = link.split('?')[0] + '?embed=1&mode=tme';
+  const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(embed);
+  let res;
+  try { res = await fetch(proxied); }
+  catch (e) { throw new Error(`proxy unreachable (${e.message})`); }
+  if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
+  const html = await res.text();
+  let m = html.match(/tgme_widget_message_date[\s\S]*?datetime="([^"]+)"/);
+  if (!m) m = html.match(/datetime="([^"]+)"/);
+  if (!m) throw new Error('no timestamp in page (private channel or unavailable)');
+  const ts = Date.parse(m[1]);
+  if (isNaN(ts)) throw new Error(`could not parse "${m[1]}"`);
+  return Math.floor(ts / 1000);
+}
+
+/* ===========================================================================
  * Wallet enrichment — SOL balance + account owner, to keep only real
  * person-controlled trader wallets (and drop LP pools / vaults / programs).
  * Runs only on the small overlap candidate set, batched via getMultipleAccounts.
@@ -340,8 +433,8 @@ function fmtAmount(raw, decimals) {
 let lastResults = null;
 
 async function analyze() {
-  const coins = parseInputs();
   const mode = $('mode').value;
+  let coins = mode === 'shilltime' ? parseShillInputs() : parseInputs();
   const excludeKnown = $('excludeKnown').checked;
 
   if (coins.length < 2) {
@@ -354,7 +447,7 @@ async function analyze() {
   const birdeyeKey = $('birdeyeKey').value.trim();
   if (mode === 'holders' && !heliusKey) { alert('Enter your Helius API key in Settings.'); return; }
   if (mode === 'trades' && !bitqueryKey) { alert('Enter your Bitquery access token in Settings.'); return; }
-  if (mode === 'birdeye' && !birdeyeKey) { alert('Enter your Birdeye API key in Settings.'); return; }
+  if ((mode === 'birdeye' || mode === 'shilltime') && !birdeyeKey) { alert('Enter your Birdeye API key in Settings.'); return; }
 
   let threshold = parseInt($('threshold').value, 10);
   if (isNaN(threshold) || threshold < 2) threshold = 2;
@@ -368,11 +461,37 @@ async function analyze() {
   const excludeBots = $('excludeBots').checked;
   let maxTrades = parseInt($('maxTrades').value, 10);
   if (isNaN(maxTrades) || maxTrades < 50) maxTrades = 5000;
+  let hoursBefore = parseFloat($('hoursBefore').value);
+  if (isNaN(hoursBefore) || hoursBefore < 0) hoursBefore = 4;
+  let hoursAfter = parseFloat($('hoursAfter').value);
+  if (isNaN(hoursAfter) || hoursAfter < 0) hoursAfter = 4;
 
   $('analyze').disabled = true;
   resetLog();
   $('resultsCard').hidden = true;
   log(`Analyzing ${coins.length} coins in "${mode}" mode…`);
+
+  // Shill-time mode: resolve each coin's call time before scanning.
+  if (mode === 'shilltime') {
+    const resolved = [];
+    for (const c of coins) {
+      try {
+        c.ts = await resolveTimeSource(c.src);
+        log(`  ⏱ ${c.label}: call time ${new Date(c.ts * 1000).toISOString()} ` +
+            `→ window ${hoursBefore}h before / ${hoursAfter}h after`, 'ok');
+        resolved.push(c);
+      } catch (e) {
+        log(`  ✗ ${c.label}: could not resolve time from "${c.src}" — ${e.message}`, 'err');
+      }
+    }
+    coins = resolved;
+    if (coins.length < 2) {
+      log('\n✗ Need at least 2 coins with a resolved call time. ' +
+          'For private channels, type a time instead of a link (e.g. mint  2024-06-20T14:30).', 'err');
+      $('analyze').disabled = false;
+      return;
+    }
+  }
 
   // wallet -> { coinsHit: Set(index), amounts: Map(index -> raw BigInt) }
   const wallets = new Map();
@@ -389,6 +508,10 @@ async function analyze() {
         owners = await fetchHolders(heliusKey, mint, label);
       } else if (mode === 'birdeye') {
         owners = await fetchTradersBirdeye(birdeyeKey, mint, label, maxTrades);
+      } else if (mode === 'shilltime') {
+        const after = Math.floor(coins[i].ts - hoursBefore * 3600);
+        const before = Math.ceil(coins[i].ts + hoursAfter * 3600);
+        owners = await fetchTradersBirdeyeWindow(birdeyeKey, mint, label, after, before, maxTrades);
       } else {
         owners = await fetchTraders(bitqueryKey, mint, label);
       }

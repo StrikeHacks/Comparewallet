@@ -27,6 +27,7 @@
           <select id="mode">
             <option value="holders">Current holders (Helius) — reliable, recommended</option>
             <option value="birdeye">Trade history (Birdeye) — also catches wallets that already sold</option>
+            <option value="shilltime">Shill-time window (Birdeye) — who bought around the Telegram call</option>
             <option value="trades">Full trade history (Bitquery) — also catches wallets that already sold</option>
           </select>
         </label>
@@ -57,11 +58,27 @@
     <section class="card">
       <div class="card-body">
         <label class="field">
-          <span>Contract addresses — one per line. Optionally add a label after a space or comma (e.g. <code>So111...  $YUI</code>)</span>
+          <span id="casHint">Contract addresses — one per line. Optionally add a label after a space or comma (e.g. <code>So111...  $YUI</code>)</span>
           <textarea id="cas" rows="6" placeholder="7xKp...mint   $YUI
 9aBc...mint   $TRY
 EgQ...mint    $ANOTHER"></textarea>
         </label>
+
+        <div class="controls" id="windowWrap" hidden>
+          <label class="field inline">
+            <span>Hours before call</span>
+            <input type="number" id="hoursBefore" min="0" step="0.5" value="4" />
+          </label>
+          <label class="field inline">
+            <span>Hours after call</span>
+            <input type="number" id="hoursAfter" min="0" step="0.5" value="4" />
+          </label>
+        </div>
+        <p class="note" id="shillHint" hidden>
+          One coin per line: <code>mint &nbsp; t.me-link</code> — e.g. <code>7xKp...mint  https://t.me/somecaller/1234</code>.
+          The tool reads the message time from the public link and scans trades in the window above.
+          You can also type a time instead of a link: <code>mint  2024-06-20T14:30</code>.
+        </p>
 
         <div class="controls">
           <label class="field inline">
