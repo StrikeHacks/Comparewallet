@@ -37,6 +37,11 @@
           <input type="password" id="birdeyeKey" placeholder="paste your Birdeye API key" autocomplete="off" />
         </label>
 
+        <label class="field" id="proxyField" hidden>
+          <span>CORS proxy for Birdeye (browsers can't call Birdeye directly). Leave default, or paste your own proxy URL ending in <code>?url=</code></span>
+          <input type="text" id="proxyUrl" placeholder="https://corsproxy.io/?url=" autocomplete="off" />
+        </label>
+
         <label class="field" id="bitqueryField" hidden>
           <span>Bitquery access token <a href="https://account.bitquery.io/user/api_v2/access_tokens" target="_blank" rel="noreferrer">(get a free token)</a></span>
           <input type="password" id="bitqueryKey" placeholder="paste your Bitquery v2 access token" autocomplete="off" />

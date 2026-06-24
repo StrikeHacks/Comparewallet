@@ -39,12 +39,20 @@ const SOLSCAN = (addr) => `https://solscan.io/account/${addr}`;
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const DEFAULT_PROXY = 'https://corsproxy.io/?url='; // browsers can't call Birdeye directly
+
+// Route a URL through the configured CORS proxy (prefix ending in ?url=).
+function proxify(url) {
+  const prefix = (typeof document !== 'undefined' && $('proxyUrl') && $('proxyUrl').value.trim()) || '';
+  return prefix ? prefix + encodeURIComponent(url) : url;
+}
 
 /* ---- Persisted settings --------------------------------------------------- */
 function loadSettings() {
   $('heliusKey').value = localStorage.getItem('cw_helius') || DEFAULT_HELIUS_KEY;
   $('bitqueryKey').value = localStorage.getItem('cw_bitquery') || '';
   $('birdeyeKey').value = localStorage.getItem('cw_birdeye') || '';
+  $('proxyUrl').value = localStorage.getItem('cw_proxy') ?? DEFAULT_PROXY;
   const mode = localStorage.getItem('cw_mode');
   if (mode) $('mode').value = mode;
   const excl = localStorage.getItem('cw_exclude');
@@ -69,6 +77,7 @@ function saveSettings() {
   localStorage.setItem('cw_helius', $('heliusKey').value.trim());
   localStorage.setItem('cw_bitquery', $('bitqueryKey').value.trim());
   localStorage.setItem('cw_birdeye', $('birdeyeKey').value.trim());
+  localStorage.setItem('cw_proxy', $('proxyUrl').value.trim());
   localStorage.setItem('cw_mode', $('mode').value);
   localStorage.setItem('cw_exclude', $('excludeKnown').checked ? '1' : '0');
   localStorage.setItem('cw_minsol', $('minSol').value);
@@ -84,6 +93,7 @@ function toggleKeyFields() {
   const mode = $('mode').value;
   $('bitqueryField').hidden = mode !== 'trades';
   $('birdeyeField').hidden = mode !== 'birdeye' && mode !== 'shilltime'; // both use Birdeye
+  $('proxyField').hidden = mode !== 'birdeye' && mode !== 'shilltime';
   $('maxTradesWrap').hidden = mode === 'holders'; // only relevant for trade-history modes
   $('windowWrap').hidden = mode !== 'shilltime';
   $('shillHint').hidden = mode !== 'shilltime';
@@ -275,7 +285,7 @@ async function fetchTradersBirdeye(apiKey, mint, label, maxTrades) {
                 `&offset=${offset}&limit=${limit}&tx_type=swap&sort_type=asc`;
     let res;
     try {
-      res = await fetch(url, {
+      res = await fetch(proxify(url), {
         headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' },
       });
     } catch (e) {
@@ -325,7 +335,7 @@ async function fetchTradersBirdeyeWindow(apiKey, mint, label, afterTime, beforeT
                 `&offset=${offset}&limit=${limit}&tx_type=swap&after_time=${afterTime}&before_time=${beforeTime}`;
     let res;
     try {
-      res = await fetch(url, { headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' } });
+      res = await fetch(proxify(url), { headers: { 'X-API-KEY': apiKey, 'x-chain': 'solana', accept: 'application/json' } });
     } catch (e) {
       throw new Error(`Could not reach Birdeye (network/CORS). (${e.message})`);
     }
@@ -361,15 +371,30 @@ async function resolveTimeSource(src) {
   throw new Error(`not a recognizable date/unix time: "${src}"`);
 }
 
-/* Fetch a public Telegram post's embed HTML through a CORS proxy. */
+/* Fetch a public Telegram post's embed HTML through a CORS proxy.
+ * Tries the configured proxy, then public fallbacks, so one being down/blocked
+ * doesn't break time/CA detection. */
 async function fetchTelegramEmbed(link) {
   const embed = link.split('?')[0] + '?embed=1&mode=tme';
-  const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(embed);
-  let res;
-  try { res = await fetch(proxied); }
-  catch (e) { throw new Error(`proxy unreachable (${e.message})`); }
-  if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
-  return res.text();
+  const enc = encodeURIComponent(embed);
+  const custom = (typeof document !== 'undefined' && $('proxyUrl') && $('proxyUrl').value.trim()) || '';
+  const candidates = [
+    custom ? custom + enc : null,
+    'https://api.allorigins.win/raw?url=' + enc,
+    'https://corsproxy.io/?url=' + enc,
+    'https://thingproxy.freeboard.io/fetch/' + embed,
+  ].filter(Boolean);
+  let lastErr = 'no proxy tried';
+  for (const p of candidates) {
+    try {
+      const res = await fetch(p);
+      if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+      const html = await res.text();
+      if (html && html.length > 200) return html;
+      lastErr = 'empty response';
+    } catch (e) { lastErr = e.message; }
+  }
+  throw new Error(`could not load the Telegram post via any proxy (${lastErr})`);
 }
 
 /* From a public t.me link, return { ts, mint } scraped from the message:

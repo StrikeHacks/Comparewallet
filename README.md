@@ -51,6 +51,34 @@ Three layers keep the results to genuine personal trader wallets:
 
 Layers 2–5 run only on the small set of wallets that already passed the overlap threshold, so they stay fast. When active, the results table and CSV gain a **SOL** column. Specific addresses can always be hard-blocked by adding them to `KNOWN_ADDRESSES` in `app.js`.
 
+## Birdeye CORS proxy
+
+Browsers can't call the Birdeye API directly (CORS), so the Birdeye **Trade history** and **Shill-time** modes route requests through a proxy. The **"CORS proxy for Birdeye"** field in Settings defaults to a public proxy (`https://corsproxy.io/?url=`) which works out of the box but can be slow/rate-limited, and your key passes through a third party.
+
+For a reliable, private proxy, deploy a free **Cloudflare Worker** and paste its URL (ending in `?url=`) into that field:
+
+```js
+export default {
+  async fetch(request) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': '*',
+      }});
+    }
+    const target = new URL(request.url).searchParams.get('url');
+    if (!target) return new Response('missing ?url=', { status: 400 });
+    const resp = await fetch(target, { method: request.method, headers: request.headers });
+    const out = new Response(resp.body, resp);
+    out.headers.set('Access-Control-Allow-Origin', '*');
+    return out;
+  }
+}
+```
+
+Steps: dash.cloudflare.com → Workers & Pages → Create → Worker → paste the code → Deploy. Then set the Settings field to `https://<your-worker>.workers.dev/?url=`. The key only ever passes through your own worker.
+
 ## Files
 
 - `index.html` — UI
